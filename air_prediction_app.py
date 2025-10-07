@@ -849,44 +849,192 @@ def preprocess_batch_data(df):
 def show_train_model_page():
     """Train model page"""
     st.header("Train AQI Prediction Model")
-    st.write("Train a new ANN model using the Air Quality dataset.")
+    st.write("Train a new ANN model using your own Air Quality dataset or the default dataset.")
     
     if not TENSORFLOW_AVAILABLE:
         st.error("❌ TensorFlow is not available. Please install TensorFlow to train the model.")
         st.code("pip install tensorflow")
         return
     
-    # Check if dataset exists
-    if not os.path.exists("AirQualityUCI.csv"):
-        st.error("❌ Dataset file 'AirQualityUCI.csv' not found in the current directory.")
-        st.write("Please ensure the dataset file is available before training.")
+    # Data source selection
+    st.subheader("📁 Data Source Selection")
+    data_source = st.radio(
+        "Choose your data source:",
+        ["Use Default Dataset (AirQualityUCI.csv)", "Upload Custom Dataset"],
+        help="Select whether to use the default dataset or upload your own"
+    )
+    
+    dataset_available = False
+    uploaded_file = None
+    
+    if data_source == "Use Default Dataset (AirQualityUCI.csv)":
+        if os.path.exists("AirQualityUCI.csv"):
+            dataset_available = True
+            st.success("✅ Default dataset found: AirQualityUCI.csv")
+        else:
+            st.error("❌ Default dataset file 'AirQualityUCI.csv' not found in the current directory.")
+            st.info("💡 Switch to 'Upload Custom Dataset' to use your own data.")
+    
+    else:  # Upload Custom Dataset
+        st.info("""
+        📋 **Dataset Format Requirements:**
+        - CSV file with semicolon (;) or comma (,) separation
+        - Required columns: Date, Time, CO(GT), PT08.S1(CO), NMHC(GT), C6H6(GT), PT08.S2(NMHC), NOx(GT), PT08.S3(NOx), NO2(GT), PT08.S4(NO2), PT08.S5(O3), T, RH, AH
+        - Missing values can be represented as -200 or NaN
+        - Decimal separator can be comma or period
+        """)
+        
+        # File uploader
+        uploaded_file = st.file_uploader(
+            "Choose a CSV file", 
+            type="csv",
+            help="Upload your air quality dataset in the specified format"
+        )
+        
+        if uploaded_file is not None:
+            # Preview uploaded data
+            try:
+                # Try to read the file with different separators
+                try:
+                    df_preview = pd.read_csv(uploaded_file, sep=';', decimal=',', nrows=5)
+                    if df_preview.shape[1] == 1:
+                        uploaded_file.seek(0)
+                        df_preview = pd.read_csv(uploaded_file, nrows=5)
+                except:
+                    uploaded_file.seek(0)
+                    df_preview = pd.read_csv(uploaded_file, nrows=5)
+                
+                uploaded_file.seek(0)  # Reset file pointer
+                
+                st.subheader("📋 Dataset Preview")
+                st.dataframe(df_preview)
+                st.write(f"**File info:** Preview of first 5 rows, {df_preview.shape[1]} columns detected")
+                
+                # Validate required columns
+                required_base_columns = ['Date', 'Time', 'CO(GT)', 'T', 'RH']
+                missing_columns = [col for col in required_base_columns if col not in df_preview.columns]
+                
+                if missing_columns:
+                    st.warning(f"⚠️ Missing required columns: {missing_columns}")
+                    st.info("The system will attempt to handle missing columns during preprocessing.")
+                else:
+                    st.success("✅ Dataset format looks good!")
+                
+                dataset_available = True
+                
+            except Exception as e:
+                st.error(f"❌ Error reading uploaded file: {str(e)}")
+                st.info("Please ensure your file is a valid CSV with the correct format.")
+    
+    # Show sample format
+    with st.expander("📋 View Required Dataset Format", expanded=False):
+        sample_data = pd.DataFrame({
+            'Date': ['10/03/2004', '10/03/2004', '10/03/2004'],
+            'Time': ['18.00.00', '19.00.00', '20.00.00'],
+            'CO(GT)': [2.6, 2.0, 2.2],
+            'PT08.S1(CO)': [1360, 1292, 1402],
+            'NMHC(GT)': [150, 112, 88],
+            'C6H6(GT)': [11.9, 9.4, 9.0],
+            'PT08.S2(NMHC)': [1046, 955, 939],
+            'NOx(GT)': [166, 103, 131],
+            'PT08.S3(NOx)': [1056, 1174, 1140],
+            'NO2(GT)': [113, 92, 114],
+            'PT08.S4(NO2)': [1692, 1559, 1555],
+            'PT08.S5(O3)': [1268, 972, 1074],
+            'T': [13.6, 13.3, 11.9],
+            'RH': [48.9, 47.7, 54.0],
+            'AH': [0.7578, 0.7255, 0.7502]
+        })
+        st.dataframe(sample_data)
+        
+        # Download sample template
+        csv_sample = sample_data.to_csv(sep=';', decimal=',', index=False)
+        st.download_button(
+            label="📥 Download Sample Template",
+            data=csv_sample,
+            file_name="air_quality_template.csv",
+            mime="text/csv",
+            help="Download a template CSV file with the correct format"
+        )
+    
+    if not dataset_available:
+        st.warning("⚠️ Please provide a dataset to proceed with training.")
         return
     
     st.info("ℹ️ Training will create a new ANN model and may take several minutes.")
     
     # Training parameters
-    st.subheader("Training Parameters")
+    st.subheader("⚙️ Training Parameters")
     col1, col2 = st.columns(2)
     
     with col1:
-        epochs = st.slider("Number of Epochs", min_value=50, max_value=200, value=100, step=10)
-        batch_size = st.selectbox("Batch Size", [16, 32, 64, 128], index=1)
+        epochs = st.slider("Number of Epochs", min_value=50, max_value=300, value=100, step=10,
+                          help="Number of training iterations. More epochs may improve accuracy but take longer.")
+        batch_size = st.selectbox("Batch Size", [16, 32, 64, 128], index=1,
+                                 help="Number of samples processed together. Larger batches may train faster.")
     
     with col2:
-        test_size = st.slider("Test Set Size", min_value=0.1, max_value=0.3, value=0.2, step=0.05)
-        
+        test_size = st.slider("Test Set Size", min_value=0.1, max_value=0.4, value=0.2, step=0.05,
+                             help="Fraction of data used for testing (not used in training).")
+        learning_rate = st.selectbox("Learning Rate", [0.001, 0.01, 0.1], index=0,
+                                    help="Controls how quickly the model learns. Lower is more stable.")
+    
+    # Advanced options
+    with st.expander("🔧 Advanced Options", expanded=False):
+        col1, col2 = st.columns(2)
+        with col1:
+            dropout_rate = st.slider("Dropout Rate", min_value=0.0, max_value=0.5, value=0.3, step=0.05,
+                                   help="Prevents overfitting. Higher values = more regularization.")
+            hidden_layers = st.selectbox("Hidden Layer Sizes", 
+                                       ["128-64-32-16", "256-128-64-32", "64-32-16", "512-256-128-64"],
+                                       index=0, help="Architecture of the neural network layers.")
+        with col2:
+            validation_split = st.slider("Validation Split", min_value=0.1, max_value=0.3, value=0.2, step=0.05,
+                                        help="Fraction of training data used for validation during training.")
+            early_stopping = st.checkbox("Early Stopping", value=True,
+                                        help="Stop training if validation loss doesn't improve.")
+    
     if st.button("🚀 Start Training", type="primary"):
         st.info("🔄 Training started... This may take several minutes.")
         
         try:
-            # Load and preprocess data
-            df = load_data()
-            if df is None:
-                st.error("Failed to load dataset.")
-                return
+            # Load data based on source
+            if data_source == "Use Default Dataset (AirQualityUCI.csv)":
+                df = load_data()
+                if df is None:
+                    st.error("Failed to load default dataset.")
+                    return
+                st.success("✅ Default dataset loaded successfully")
+            else:
+                # Load uploaded file
+                try:
+                    # Try semicolon separator first
+                    df = pd.read_csv(uploaded_file, sep=';', decimal=',')
+                    if df.shape[1] == 1:
+                        uploaded_file.seek(0)
+                        df = pd.read_csv(uploaded_file)
+                except:
+                    uploaded_file.seek(0)
+                    df = pd.read_csv(uploaded_file)
+                
+                st.success(f"✅ Custom dataset loaded: {df.shape[0]} rows, {df.shape[1]} columns")
             
             with st.spinner("Preprocessing data..."):
                 df = preprocess_data(df)
+            
+            # Data quality check
+            st.subheader("📊 Data Quality Report")
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total Samples", len(df))
+            with col2:
+                st.metric("Features", len([col for col in df.columns if col != 'AQI']))
+            with col3:
+                missing_percentage = (df.isnull().sum().sum() / (df.shape[0] * df.shape[1])) * 100
+                st.metric("Missing Data %", f"{missing_percentage:.1f}%")
+            with col4:
+                st.metric("Target (AQI)", "Generated" if 'AQI' in df.columns else "Missing")
             
             # Prepare features
             feature_columns = [col for col in df.columns if col != 'AQI']
@@ -898,7 +1046,11 @@ def show_train_model_page():
             X = X[mask]
             y = y[mask]
             
-            st.success(f"✅ Data loaded: {len(X)} samples, {len(feature_columns)} features")
+            if len(X) == 0:
+                st.error("❌ No valid samples found after preprocessing. Please check your data quality.")
+                return
+            
+            st.success(f"✅ Data ready: {len(X)} valid samples, {len(feature_columns)} features")
             
             # Split data
             X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
@@ -908,40 +1060,116 @@ def show_train_model_page():
             X_train_scaled = scaler.fit_transform(X_train)
             X_test_scaled = scaler.transform(X_test)
             
-            # Build model
-            model = build_model(X_train_scaled.shape[1])
-            st.success("✅ Model architecture created")
+            # Build model with custom architecture
+            def build_custom_model(input_dim, hidden_layers_str, dropout_rate, learning_rate):
+                layer_sizes = list(map(int, hidden_layers_str.split('-')))
+                
+                model = keras.Sequential()
+                model.add(layers.Dense(layer_sizes[0], activation='relu', input_shape=(input_dim,)))
+                model.add(layers.Dropout(dropout_rate))
+                
+                for size in layer_sizes[1:]:
+                    model.add(layers.Dense(size, activation='relu'))
+                    model.add(layers.Dropout(dropout_rate * 0.7))  # Reduced dropout for deeper layers
+                
+                model.add(layers.Dense(1))  # Output layer
+                
+                model.compile(
+                    optimizer=keras.optimizers.Adam(learning_rate=learning_rate),
+                    loss='mse',
+                    metrics=['mae']
+                )
+                
+                return model
+            
+            model = build_custom_model(X_train_scaled.shape[1], hidden_layers, dropout_rate, learning_rate)
+            st.success("✅ Custom model architecture created")
+            
+            # Display model summary
+            with st.expander("🏗️ Model Architecture Summary", expanded=False):
+                buffer = io.StringIO()
+                model.summary(print_fn=lambda x: buffer.write(x + '\n'))
+                model_summary = buffer.getvalue()
+                st.text(model_summary)
+            
+            # Prepare callbacks
+            callbacks = []
+            if early_stopping:
+                early_stop = keras.callbacks.EarlyStopping(
+                    monitor='val_loss', 
+                    patience=20, 
+                    restore_best_weights=True,
+                    verbose=0
+                )
+                callbacks.append(early_stop)
             
             # Training progress
             progress_bar = st.progress(0)
             status_text = st.empty()
             metrics_placeholder = st.empty()
+            chart_placeholder = st.empty()
+            
+            # Store training history for plotting
+            training_history = {'loss': [], 'val_loss': [], 'mae': [], 'val_mae': []}
             
             # Custom callback
             class StreamlitCallback(keras.callbacks.Callback):
                 def on_epoch_end(self, epoch, logs=None):
                     progress = (epoch + 1) / epochs
                     progress_bar.progress(progress)
-                    status_text.text(f'Epoch {epoch + 1}/{epochs} - Loss: {logs["loss"]:.4f} - Val Loss: {logs["val_loss"]:.4f}')
+                    status_text.text(f'Epoch {epoch + 1}/{epochs} - Loss: {logs["loss"]:.4f} - Val Loss: {logs["val_loss"]:.4f} - MAE: {logs["mae"]:.4f}')
+                    
+                    # Store history
+                    training_history['loss'].append(logs['loss'])
+                    training_history['val_loss'].append(logs['val_loss'])
+                    training_history['mae'].append(logs['mae'])
+                    training_history['val_mae'].append(logs['val_mae'])
                     
                     if epoch % 10 == 0:  # Update metrics every 10 epochs
                         with metrics_placeholder.container():
-                            col1, col2, col3 = st.columns(3)
+                            col1, col2, col3, col4 = st.columns(4)
                             with col1:
                                 st.metric("Training Loss", f"{logs['loss']:.4f}")
                             with col2:
                                 st.metric("Validation Loss", f"{logs['val_loss']:.4f}")
                             with col3:
-                                st.metric("MAE", f"{logs['mae']:.4f}")
+                                st.metric("Training MAE", f"{logs['mae']:.4f}")
+                            with col4:
+                                st.metric("Validation MAE", f"{logs['val_mae']:.4f}")
+                        
+                        # Update training chart
+                        if len(training_history['loss']) > 1:
+                            with chart_placeholder.container():
+                                fig_training = go.Figure()
+                                epochs_range = list(range(1, len(training_history['loss']) + 1))
+                                
+                                fig_training.add_trace(go.Scatter(
+                                    x=epochs_range, y=training_history['loss'],
+                                    mode='lines', name='Training Loss', line=dict(color='blue')
+                                ))
+                                fig_training.add_trace(go.Scatter(
+                                    x=epochs_range, y=training_history['val_loss'],
+                                    mode='lines', name='Validation Loss', line=dict(color='red')
+                                ))
+                                
+                                fig_training.update_layout(
+                                    title="Training Progress",
+                                    xaxis_title="Epoch",
+                                    yaxis_title="Loss",
+                                    height=300
+                                )
+                                st.plotly_chart(fig_training, use_container_width=True)
+            
+            callbacks.append(StreamlitCallback())
             
             # Train model
             history = model.fit(
                 X_train_scaled, y_train,
-                validation_data=(X_test_scaled, y_test),
+                validation_split=validation_split,
                 epochs=epochs,
                 batch_size=batch_size,
                 verbose=0,
-                callbacks=[StreamlitCallback()]
+                callbacks=callbacks
             )
             
             # Evaluate model
@@ -956,51 +1184,112 @@ def show_train_model_page():
             joblib.dump(scaler, SCALER_PATH)
             joblib.dump(feature_columns, FEATURE_COLUMNS_PATH)
             
+            # Save training metadata
+            training_metadata = {
+                'dataset_source': data_source,
+                'training_samples': len(X_train),
+                'test_samples': len(X_test),
+                'features': len(feature_columns),
+                'epochs_trained': len(history.history['loss']),
+                'final_metrics': {'mse': mse, 'r2': r2, 'mae': mae},
+                'training_params': {
+                    'epochs': epochs,
+                    'batch_size': batch_size,
+                    'learning_rate': learning_rate,
+                    'dropout_rate': dropout_rate,
+                    'hidden_layers': hidden_layers
+                }
+            }
+            joblib.dump(training_metadata, 'models/training_metadata.pkl')
+            
             # Clear progress indicators
             progress_bar.empty()
             status_text.empty()
             metrics_placeholder.empty()
+            chart_placeholder.empty()
             
             # Show results
             st.success("🎉 Training completed successfully!")
             
-            col1, col2, col3 = st.columns(3)
+            col1, col2, col3, col4 = st.columns(4)
             with col1:
-                st.metric("R² Score", f"{r2:.4f}")
+                st.metric("R² Score", f"{r2:.4f}", help="Coefficient of determination (higher is better)")
             with col2:
-                st.metric("Mean Absolute Error", f"{mae:.2f}")
+                st.metric("Mean Absolute Error", f"{mae:.2f}", help="Average absolute prediction error")
             with col3:
-                st.metric("Root Mean Square Error", f"{np.sqrt(mse):.2f}")
+                st.metric("Root Mean Square Error", f"{np.sqrt(mse):.2f}", help="Root mean square error")
+            with col4:
+                st.metric("Epochs Completed", len(history.history['loss']))
             
-            # Plot training history
-            fig_loss = px.line(
-                x=range(1, len(history.history['loss']) + 1),
-                y=[history.history['loss'], history.history['val_loss']],
-                title="Training and Validation Loss",
-                labels={'x': 'Epoch', 'y': 'Loss'}
-            )
-            fig_loss.add_scatter(x=list(range(1, len(history.history['loss']) + 1)), 
-                               y=history.history['loss'], name='Training Loss')
-            fig_loss.add_scatter(x=list(range(1, len(history.history['val_loss']) + 1)), 
-                               y=history.history['val_loss'], name='Validation Loss')
-            st.plotly_chart(fig_loss, use_container_width=True)
+            # Plot final training history
+            col1, col2 = st.columns(2)
             
-            # Prediction vs Actual scatter plot
-            fig_pred = px.scatter(
-                x=y_test, 
-                y=y_pred.flatten(),
-                title="Predicted vs Actual AQI Values",
-                labels={'x': 'Actual AQI', 'y': 'Predicted AQI'}
-            )
-            fig_pred.add_scatter(x=[y_test.min(), y_test.max()], 
-                               y=[y_test.min(), y_test.max()], 
-                               mode='lines', name='Perfect Prediction')
-            st.plotly_chart(fig_pred, use_container_width=True)
+            with col1:
+                fig_loss = go.Figure()
+                epochs_range = list(range(1, len(history.history['loss']) + 1))
+                
+                fig_loss.add_trace(go.Scatter(
+                    x=epochs_range, y=history.history['loss'],
+                    mode='lines', name='Training Loss', line=dict(color='blue')
+                ))
+                fig_loss.add_trace(go.Scatter(
+                    x=epochs_range, y=history.history['val_loss'],
+                    mode='lines', name='Validation Loss', line=dict(color='red')
+                ))
+                
+                fig_loss.update_layout(
+                    title="Training and Validation Loss",
+                    xaxis_title="Epoch",
+                    yaxis_title="Loss",
+                    height=400
+                )
+                st.plotly_chart(fig_loss, use_container_width=True)
             
-            st.info("🔄 Model saved! You can now use it for predictions. Refresh the page to load the new model.")
+            with col2:
+                # Prediction vs Actual scatter plot
+                fig_pred = px.scatter(
+                    x=y_test, 
+                    y=y_pred.flatten(),
+                    title="Predicted vs Actual AQI Values",
+                    labels={'x': 'Actual AQI', 'y': 'Predicted AQI'}
+                )
+                fig_pred.add_scatter(x=[y_test.min(), y_test.max()], 
+                                   y=[y_test.min(), y_test.max()], 
+                                   mode='lines', name='Perfect Prediction',
+                                   line=dict(dash='dash', color='red'))
+                fig_pred.update_layout(height=400)
+                st.plotly_chart(fig_pred, use_container_width=True)
+            
+            # Feature importance (approximate using feature std)
+            if len(feature_columns) <= 20:  # Only show for reasonable number of features
+                feature_importance = np.std(X_train_scaled, axis=0)
+                importance_df = pd.DataFrame({
+                    'Feature': feature_columns,
+                    'Importance': feature_importance
+                }).sort_values('Importance', ascending=True)
+                
+                fig_importance = px.bar(
+                    importance_df, 
+                    x='Importance', 
+                    y='Feature',
+                    title="Feature Importance (Standard Deviation)",
+                    orientation='h'
+                )
+                fig_importance.update_layout(height=400)
+                st.plotly_chart(fig_importance, use_container_width=True)
+            
+            st.info("🔄 Model saved! You can now use it for predictions. The page will automatically refresh to load the new model.")
+            
+            # Auto-refresh to load new model
+            st.experimental_rerun()
             
         except Exception as e:
             st.error(f"❌ Training failed: {str(e)}")
+            st.error("Please check your dataset format and try again.")
+            
+            # Show error details in expander
+            with st.expander("🔍 Error Details", expanded=False):
+                st.code(str(e))
 
 def show_model_performance_page():
     """Model performance page"""
