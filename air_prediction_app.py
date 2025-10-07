@@ -234,24 +234,44 @@ def load_model():
 
 def calculate_rule_based_aqi(input_data):
     """Calculate AQI using rule-based approach when ML model is not available"""
-    # Simple rule-based calculation using CO, NOx, NO2 as main indicators
-    co_weight = 0.4
-    nox_weight = 0.3
-    no2_weight = 0.3
+    # Enhanced rule-based calculation using multiple pollutants
     
-    # Normalize values (using reasonable ranges)
-    co_norm = min(input_data.get('CO_GT', 0) / 10.0, 1.0) * 100
-    nox_norm = min(input_data.get('NOx_GT', 0) / 500.0, 1.0) * 100
-    no2_norm = min(input_data.get('NO2_GT', 0) / 300.0, 1.0) * 100
+    # Handle both formats: 'CO_GT' and 'CO(GT)'
+    co_value = input_data.get('CO(GT)', input_data.get('CO_GT', 0))
+    nox_value = input_data.get('NOx(GT)', input_data.get('NOx_GT', 0))
+    no2_value = input_data.get('NO2(GT)', input_data.get('NO2_GT', 0))
+    nmhc_value = input_data.get('NMHC(GT)', input_data.get('NMHC_GT', 0))
+    c6h6_value = input_data.get('C6H6(GT)', input_data.get('C6H6_GT', 0))
+    temp_value = input_data.get('T', 20)
+    humidity_value = input_data.get('RH', 50)
     
-    # Calculate weighted AQI
-    aqi = (co_norm * co_weight + nox_norm * nox_weight + no2_norm * no2_weight) * 2
+    # Debug print (will be visible in logs)
+    # print(f"Debug: CO={co_value}, NOx={nox_value}, NO2={no2_value}, T={temp_value}, RH={humidity_value}")
     
-    # Add some environmental factors
-    temp_factor = 1.0 + (abs(input_data.get('T', 20) - 20) / 100)  # Temperature deviation
-    humidity_factor = 1.0 + (abs(input_data.get('RH', 50) - 50) / 200)  # Humidity deviation
+    # Normalize pollutant values based on typical ranges
+    co_norm = min(max(co_value, 0) / 10.0, 1.0) * 100     # CO: 0-10 mg/m³
+    nox_norm = min(max(nox_value, 0) / 500.0, 1.0) * 100  # NOx: 0-500 µg/m³
+    no2_norm = min(max(no2_value, 0) / 300.0, 1.0) * 100  # NO2: 0-300 µg/m³
+    nmhc_norm = min(max(nmhc_value, 0) / 1000.0, 1.0) * 100  # NMHC: 0-1000 µg/m³
+    c6h6_norm = min(max(c6h6_value, 0) / 50.0, 1.0) * 100    # Benzene: 0-50 µg/m³
     
+    # Weighted average (weights based on health impact)
+    aqi_base = (co_norm * 0.25 + nox_norm * 0.20 + no2_norm * 0.25 + 
+                nmhc_norm * 0.15 + c6h6_norm * 0.15)
+    
+    # Scale to AQI range (0-500)
+    aqi = aqi_base * 3  # Scale factor to get reasonable AQI values
+    
+    # Environmental factors
+    temp_factor = 1.0 + (abs(temp_value - 20) / 50)  # Temperature effect
+    humidity_factor = 1.0 + (abs(humidity_value - 50) / 100)  # Humidity effect
+    
+    # Apply environmental factors
     aqi = aqi * temp_factor * humidity_factor
+    
+    # Ensure minimum AQI for any pollution (if any pollutants are present)
+    if any([co_value > 0, nox_value > 0, no2_value > 0, nmhc_value > 0, c6h6_value > 0]):
+        aqi = max(aqi, 15)  # Minimum AQI when pollutants are detected
     
     return max(0, min(500, aqi))  # Clamp between 0 and 500
 
@@ -508,6 +528,24 @@ def show_single_prediction_page(model, scaler, feature_columns):
                 'Month': month,
                 'DayOfWeek': day_of_week
             }
+            
+            # Debug section (expandable)
+            with st.expander("🔍 Debug: View Input Values", expanded=False):
+                st.write("**Input values being used for prediction:**")
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.write("**Pollutants:**")
+                    st.write(f"- CO: {prediction_data['CO(GT)']} mg/m³")
+                    st.write(f"- NOx: {prediction_data['NOx(GT)']} µg/m³")
+                    st.write(f"- NO2: {prediction_data['NO2(GT)']} µg/m³")
+                    st.write(f"- NMHC: {prediction_data['NMHC(GT)']} µg/m³")
+                    st.write(f"- Benzene: {prediction_data['C6H6(GT)']} µg/m³")
+                with col2:
+                    st.write("**Environmental:**")
+                    st.write(f"- Temperature: {prediction_data['T']}°C")
+                    st.write(f"- Humidity: {prediction_data['RH']}%")
+                    st.write(f"- Time: {prediction_data['Hour']}:00")
+                    st.write(f"- Date: {prediction_data['Day']}/{prediction_data['Month']}")
             
             # Make prediction
             with st.spinner("Making prediction..."):
